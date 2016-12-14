@@ -1,0 +1,398 @@
+---
+title: "Final exercise - Course R"
+author: "Jonas Dinesen"
+date: "13 Dec 2016"
+output: html_document
+---
+# Traffic Flow in the town of Aarhus, Denmark
+
+## Dataset
+
+The municipality in my hometown started a few years back to monitor traffic in hundreds of different positions around the city. The monitoring is done by picking up the signal from bluetooth devices getting near the monitor and then measuring their speed between two points.[^1]
+
+[^1]: On data used: The data is updated every five minutes, and the municipality gives free access to a feed providing json data files. The data is not logged by the municipality. The data is part of the EU FP7 Citypulse project, and I found the data I use through the paper "Semantic Modelling of Smart City Data", by Bischof et al (https://www.w3.org/2014/02/wot/papers/karapantelakis.pdf). I could have collected the data myself, but to have sufficient data without dataholes and also have data from a long enough period I opted for using already collected data: http://iot.ee.surrey.ac.uk:8080/index.html
+
+I found the data interesting since it was local, extensive and free of use.
+
+## Preparation
+
+The data was downloaded as a single CSV files for each position, and in a Python script (see "Final Exercise - 4- Handling data.ipynb") .all the files where converted from json and txt, and merged into large csv files.
+
+```{r libraries, echo=FALSE, warning=TRUE}
+#install.packages("forecast", repos=c("http://rstudio.org/_packages", "http://cran.rstudio.com"))
+library(ggplot2)
+library(gridExtra)
+library(reshape2)
+library(GGally)
+library(stats)
+library(ggplot2)
+library(dplyr)
+library(ggmap)
+library(splitstackshape)
+library(rjson)
+library(scales)
+```
+
+
+```{r gather_data, echo=FALSE,warning=TRUE}
+# Read in position file from csv
+positions <- read.csv("data_files/measuring_points.csv",sep=',')
+
+# Read in traffic data file from CSV
+traffic <- read.csv("data_files/final_data.csv",sep=',')
+
+# Rename columns in traffic data file to fit with position file
+colnames(traffic) <- c("status", "avgMeasuredTime", "avgSpeed", "extID", "medianMeasuredTime", "timestamp", "vehicleCount", "X_id", "reportId")
+
+# Merge the two csv datasets datacollection and positions
+full_dataset <- merge(x = traffic, y = positions, by = 'reportId', all = TRUE)
+
+```
+
+Due to the size of the data, I picked a subset from 146 locations which gave me around 5.5 mio datapoints. And I removed test data and NA values. Due to long waiting times I also sampled the data down to half a million datapoints. 
+
+```{r clean full_dataset, echo = FALSE, warning=TRUE}
+# Remove test value 1164
+full_dataset.clean <- subset(full_dataset, full_dataset$reportId != 1164)
+
+# Remove rows if no lon1 value or status is not OK
+full_dataset.clean.nna <- full_dataset.clean[!(is.na(full_dataset.clean$lon1)|full_dataset.clean$status != 'OK'),]
+
+# Change from factor into numerical values for speed and vehiclecount
+full_dataset.clean.nna$avgSpeed<-as.numeric(as.character(full_dataset.clean.nna$avgSpeed))
+full_dataset.clean.nna$vehicleCount<-as.numeric(as.character(full_dataset.clean.nna$vehicleCount))
+
+# Set seeed
+set.seed(32345)
+
+# Create a sample that only use subset of data for Knitr and Rstudio to not timeout
+full_dataset.clean.nna <- full_dataset.clean.nna[sample(1:nrow(full_dataset.clean.nna), 500000,replace=TRUE),]
+
+# Add normal day in traffic data
+full_dataset.clean.nna$date <- as.Date(as.POSIXct(full_dataset.clean.nna$timestamp))
+
+# Data points plot
+ggplot(aes(x=date),data=full_dataset.clean.nna)+
+  geom_bar()
+
+```
+
+The plot above display how the data for each date have thousands of measurements, and even the dates with the highest loss of data still have several thousands datapoints. 
+
+From the initial data a smaller sample set is created to be able to get a quick overview with 'ggpairs':
+
+```{r first look, echo = FALSE, warning=FALSE}
+
+# Create a quick overview of the four variables speed, vehicles, time
+sample <- full_dataset.clean.nna[sample(1:nrow(full_dataset.clean.nna), 50000),]
+sample_set <- sample[, c(4,8,15,16)] 
+
+# Create multi plot
+ggpairs(sample_set)
+
+```
+
+The GGPairs multi-plot is made on a sample of 50000 out of the one million datapoints.
+
+This first glance gives some interesting notes, for example that the average speed is only slightly related to the number of vehicles - I would have believed that a smaller amount of cars on the roads, would show a larger increase in speeds. 
+
+The NDT_in_KMH is the non-damaging test speed - and not related to the legal speedlimit of the road - but it still shows a correllation with the avgSpeed; most likely due to the roads being built to withstand the type of traffic expected.
+
+##  1. AvgSpeeds vs No. of Vehicles in Aarhus. 
+
+I decided to look into the speeds and number of vehicles based on the hour of the day - and the day of the week.
+
+```{r speed, vehicles and time, echo = FALSE}
+# Calculate hourly averages in new dataframe - show curve over hourly averages
+
+# Selecting the hours from the timestamp
+full_dataset.clean.nna$hour <- substr(full_dataset.clean.nna$timestamp, 12,13)
+
+# Adding two extra hours to hour variable due to wrong timezone in original dataset
+full_dataset.clean.nna$hour <- as.integer(full_dataset.clean.nna$hour) + 2
+full_dataset.clean.nna$hour <- as.character(full_dataset.clean.nna$hour)
+full_dataset.clean.nna$hour[full_dataset.clean.nna$hour == "25"]<- "1"
+full_dataset.clean.nna$hour[full_dataset.clean.nna$hour == "24"]<- "0"
+full_dataset.clean.nna$hour <- as.integer(full_dataset.clean.nna$hour)
+
+# Insert day of week
+full_dataset.clean.nna$day = strftime(full_dataset.clean.nna$timestamp,'%A')
+# Sort days 
+full_dataset.clean.nna$day <- factor(full_dataset.clean.nna$day,levels=c("mandag", "tirsdag", "onsdag", "torsdag", "fredag", "lørdag", "søndag"))
+
+# Plot of no. of cars and avg.speed per hour of the day
+ggplot(data= full_dataset.clean.nna, aes(x = hour))+
+  geom_line(aes(y = vehicleCount, color = 'vehicleCount'), group = 1,stat = 'summary', fun.y = median, size=1)+
+  geom_line(aes(y = avgSpeed, color = 'avgSpeed'),stat = 'summary', fun.y = median, size=1, group = 1)
+
+```
+
+The hourly plot gives a good indication of rush hour traffic. For a deeper understanding I will in the final plot look into each day separately.
+
+
+## 2 Look into mapping - and seeing heatmap of speed and vehicles
+
+To get another look at the data, I took the latitude and longitude to add the spatial dimension, and see if any patterns emerged for how speed and vehicle changed throughout the city.
+
+```{r echo = FALSE,warning=FALSE}
+# Make initial plot of all positions- start, end and distance
+
+p1 <- ggplot(aes(x=lon1, y=lat1), data=positions) +
+  geom_point(color = 'green')
+
+p2 <- ggplot(aes(x=lon2, y=lat2), data=positions) +
+    geom_point(color = 'orange')
+
+p3 <- ggplot(aes(x=lon1, y=lat1), data=positions) +
+  geom_segment(aes(x = lon1, y = lat1, xend = lon2, yend = lat2))
+
+grid.arrange(p1,p2,p3, nrow=2)
+
+```
+
+The plot of the location data is with startpoints in green and endpoints in orange - and then with the stretches of road where speeds are measured displayed in the last plot.
+
+For the sake of view a map is added for the background.[^2]
+
+[^2]I used ggmap after finding a short tutorial: https://www.nceas.ucsb.edu/~frazier/RSpatialGuides/ggmap/ggmapCheatsheet.pdf and https://journal.r-project.org/archive/2013-1/kahle-wickham.pdf
+
+```{r Google Map, echo=FALSE, warning=FALSE}
+# Create viewable map for the town of AArhus 
+
+# Creating bounding box based on latitude and longitude of dataset
+bbox <- make_bbox(full_dataset.clean.nna$lon1, full_dataset.clean.nna$lat1, f = .3)
+
+# Creation of map (through Ggmap)
+map <- get_map(bbox)
+# map <- get_map("Aarhus", zoom=13) # based on google search term location 
+
+# Create map to see data spread 
+ggmap(map)+
+  geom_point(aes(x = lon1, y = lat1), data = full_dataset.clean.nna, alpha = .5, color="darkred")+
+  geom_segment(aes(x = lon1, y = lat1, xend = lon2, yend = lat2), data=full_dataset.clean.nna)
+
+```
+
+With the location data it is possible to produce a heat map - for this I selected the average speeds, and then split the data over hours of the day:
+
+```{r plot positions, echo=FALSE, warning=TRUE}
+
+# Use dplyr to create a summary with means for average speed per day
+speed.per.point <- full_dataset.clean.nna %>% group_by(lon1,lat1) %>% summarize(avgSpeed = mean(as.numeric(as.character(avgSpeed))))
+
+# Remove NA value  
+speed.per.point.nna <- speed.per.point[complete.cases(speed.per.point),]
+
+# Create value row for heatmap
+speed.per.point.expanded <- expandRows(speed.per.point.nna, "avgSpeed",drop=FALSE)
+
+# heatmap showing where avgSpeed is the highest
+ggmap(map,legend = "topleft", extent = "device")+
+  stat_density2d(aes(x = lon1, y = lat1, fill = ..level.., alpha = ..level..), data=speed.per.point.expanded, geom="polygon", size = 2, bins = 10)+
+  scale_fill_gradient(low = "red", high = "darkred")+
+  scale_alpha(guide = FALSE)
+
+```
+
+The heatmap dispaly the average speed around the city. The hotspots are as expected in the locations with the main roads in the city. 
+
+```{r warning=TRUE, echo=FALSE}
+## Get average of avgSpeed for each position - group by position
+
+# Use dplyr to create a summary with means for average speed per day
+cars.per.point <- full_dataset.clean.nna %>% group_by(lon1,lat1) %>% summarize(vehicleCount = mean(as.numeric(as.character(vehicleCount))))
+
+# Remove NA value  
+cars.per.point.nna <- cars.per.point[complete.cases(cars.per.point),]
+
+# Create value row for heatmap
+cars.per.point.expanded <- expandRows(cars.per.point.nna, "vehicleCount",drop=FALSE)
+
+# Plot heatmap for number of cars 
+ggmap(map)+
+  stat_density2d(aes(x = lon1, y = lat1, fill = ..level.., alpha = ..level..), data=cars.per.point.expanded, geom="polygon", size = 3, bins = 10)
+
+```
+
+The above heatmap is showing the traffic around the city on an overall basis. It gives insight into busy areas.
+
+
+## 3 Combining with data on temperatures to see if any effect
+
+To find causes that affect speed and number of vehicles on the road, a dataset with weather information is tested against the data.
+The weather is collected from the same source as the used dataset, logged for the city.
+
+
+```{r weather effect on traffic, echo=FALSE,warning=FALSE}
+
+# Read in weather CSV files
+temp <- read.csv('data_files/tempm.csv',sep=',') # Temperature
+humi <- read.csv('data_files/wspdm.csv',sep=',') # Windspeeds
+wind <- read.csv('data_files/hum.csv',sep=',')# Humidity levels
+
+# Merge datasets
+step1 <- merge(x = temp, y = wind, by = 'timestamp', all = TRUE)
+full_weather <- merge(x = step1, y = humi, by = 'timestamp', all = TRUE)
+
+# Selecting the hours from the timestamp
+full_weather$hour <- substr(full_weather$timestamp, 12,13)
+full_weather$hour <- as.integer(full_weather$hour)
+
+# Insert day of week
+full_weather$weekday = strftime(full_weather$timestamp,'%A')
+
+# Insert days
+full_weather$day <- as.Date(as.POSIXct(full_weather$timestamp))
+
+# Plot of average temp and rainfall in August + September in the area of Aarhus (source: dmi.dk)
+p1 <- ggplot(data=full_weather,aes(x=day))+
+  geom_point(aes(y = tempm), alpha =.2,color="red")+
+  stat_summary(aes(y=tempm,group=1),fun.y=mean,colour="darkred",geom="line",group=1,size=2)+
+  labs(x="Time", y="Temperature")+
+  scale_x_date(labels = date_format("%m/%d"))
+
+p2 <- ggplot(data=full_weather,aes(x=day))+
+  geom_point(aes(y = wspdm), alpha =.2,color="green")+
+  stat_summary(aes(y=wspdm,group=1),fun.y=mean,colour="darkgreen",geom="line",group=1,size=2)+
+  labs(x="Time", y="Windspeed")+
+  scale_x_date(labels = date_format("%m/%d"))
+
+p3 <- ggplot(data=full_weather,aes(x=day))+
+  geom_point(aes(y = hum), alpha =.2,color="blue")+
+  stat_summary(aes(y=hum,group=1),fun.y=mean,colour="darkblue",geom="line",group=1,size=2)+
+  labs(x="Time", y="Humidity")+
+  scale_x_date(labels = date_format("%m/%d"))
+
+grid.arrange(p1,p2,p3, nrow=3)
+
+## WEATHER DEVELOPMENT DURING THE DAY
+
+# Look into development over the day
+ggplot(data=full_weather,aes(x=hour))+
+  stat_summary(aes(y=tempm,group=1, colour="Temperature"),fun.y=mean,geom="line",group=1, size=2)+
+  stat_summary(aes(y=hum,group=1,colour="Humidity"),fun.y=mean,geom="line",group=1, size=2)+
+  stat_summary(aes(y=wspdm,group=1, colour="Windspeed"),fun.y=mean,geom="line",group=1,size=2)+
+  labs(x="Time", y="Averages")+
+  scale_colour_manual(values=c("red","green","blue"))
+       
+```
+
+The weather plots for the whole peiod shows a temperature declining with time, while humidity and wind goes up and down with minor peaks. while the plot for the averages of all days spread out over each hour gives a view ofhow windspeed and temperature peaks during the day while humidity dips. 
+
+To see if there is any influence on the traffic speed or amount of vehicles on the road we merge the datasets and plot them together.
+
+```{r weather, echo=FALSE,warning=TRUE}
+
+# Aggregate data for both dataset to be averages per hour
+weather.hourly <- full_weather %>% group_by(day, hour) %>% summarize(hum = mean(as.numeric(as.character(hum))),tempm = mean(as.numeric(as.character(tempm))),wspdm = mean(as.numeric(as.character(wspdm))))
+
+traffic.hourly <- full_dataset.clean.nna %>% group_by(date, hour) %>% summarize(vechicleCount = mean(as.numeric(as.character(vehicleCount))),avgSpeed = mean(as.numeric(as.character(avgSpeed))))
+
+# Merge weather with traffic
+full_dataset.weather <- merge(x=full_dataset.clean.nna, y=full_weather, by.x = c('date','hour'), by.y=c('day','hour'), all.x = TRUE)
+
+# Create a subset with needed columns to limit the size of the dataframe
+paired_set <- full_dataset.weather[, c(2,6,10,24,25,26,27)] 
+
+ggpairs(paired_set)
+
+```
+
+The Ggpairs multiple plots and especially correllation numbers show that avgSpeed is hardly affected by the temperature, humidity or windspeed for the period looked into. But the count of vehicles show a slight increase when humidity is high, and a a slight decrease in hotter or more windy days - though not statistically significant.
+
+```{r weather continued, echo=FALSE,warning=FALSE}
+
+# Plotting each weekday in facet wrap to compare
+
+ggplot(data=paired_set, aes(x = hour))+
+  geom_line(aes(y=tempm,color="Temperature"), stat = 'summary', fun.y = median, size=1)+
+  geom_line(aes(y=hum,color="Humidity"), stat = 'summary', fun.y = median, size=1)+
+  geom_line(aes(y=wspdm,color="Windspeed"), stat = 'summary', fun.y = median, size=1)+
+  geom_point(aes(y=vehicleCount,color="Vehicles"), stat = 'summary', fun.y = median, size=1)+
+  geom_point(aes(y=avgSpeed,color="Average Speed"), stat = 'summary', fun.y = median, size=1)+
+  facet_wrap(~weekday)
+
+```
+
+In the weekly overview there seems to be a low correllation between humdity and number of cars on the road on Thursdays. Perhaps the day of the week where we are the most tired, and therefore slightly inclined to take the car despite good weather.
+
+## Final Plots
+
+```{r finalplots, echo=FALSE, warning=TRUE}
+
+## HOURLY TRAFFIC FLOW
+
+# Plot of no. of cars and avg.speed for day of week per hour
+ggplot(data= full_dataset.clean.nna, aes(x = as.integer(hour)))+
+  geom_line(aes(y = vehicleCount, color = 'vehicleCount'), group = 1,stat = 'summary', fun.y = median, size=1)+
+  geom_line(aes(y = avgSpeed, color = 'avgSpeed'),stat = 'summary', fun.y = median, size=1, group = 1)+
+  labs(x="Hours", y="Count")+
+  scale_colour_manual(values=c("red","green"))+
+  scale_x_discrete(limits=seq(0,23, by=5))+
+  facet_wrap(~ day)+
+  labs(title ="Number of cars and average speed", subtitle="Plotted for the hours in a day")
+
+
+## HEAT MAP AVG SPEED 
+
+# Create for each day in the week - to display in heatmaps
+cars.per.point.days <- full_dataset.clean.nna %>% group_by(lon1,lat1,day,hour) %>% summarize(vehicleCount = sum(as.numeric(as.character(vehicleCount))))
+
+# Remove NA value               
+cars.per.point.days.nna <- cars.per.point.days[complete.cases(cars.per.point.days),]
+# Create value row for heatmap      
+cars.per.point.expanded <- expandRows(cars.per.point.days.nna, "vehicleCount",drop=FALSE)
+
+# Create subset for heatmap
+subsetting <- subset(cars.per.point.expanded,cars.per.point.expanded$hour == c(6,7,8,9))
+only_weekdays <- subset(subsetting, subsetting$day != c('lørdag','søndag'))
+# Facet wrap map showing average speed for each day
+ggmap(map)+
+  stat_density2d(aes(x = lon1, y = lat1, fill = ..level.., alpha=..level..), data=only_weekdays, geom="polygon", size = 2, bins = 10)+
+  scale_fill_gradient(low = "red", high = "darkred")+
+  scale_alpha(guide = FALSE)+
+  facet_wrap(~hour, ncol=2, strip.position="bottom")+
+  labs(title ="Traffic density", subtitle="6-9 AM in Aarhus")
+
+## WEATHER EFFECT
+
+# Creating subset of data within specific one hour timeslot to avoid change being the effect of workday changein traffic flow coinciding with change in daily temperature heating or similar 
+paired_set.eleven <- subset(paired_set, paired_set$hour == "11")
+
+ggplot(data=paired_set.eleven)+
+  geom_line(aes(x=vehicleCount,y=hum,colour="Humidity"),group=1,stat = 'summary', fun.y = median, size=1)+
+  geom_line(aes(x=vehicleCount,y=tempm,colour="Temperature"),group=1,stat = 'summary', fun.y = median, size=1)+
+  geom_line(aes(x=vehicleCount,y=wspdm, colour="Windspeed"),group=1,stat = 'summary', fun.y = median, size=1)+
+  scale_x_continuous(limits=c(12,20))+
+  scale_colour_manual(values=c("red","green","blue"))+
+  labs(title ="Temperate and no. of cars", subtitle="Measured on weekdays from 11-12 O'clock", y="Measure of weather", x="Number of cars")
+  
+# Correllation check with no. of vehicles and humidity
+cor.test(paired_set.eleven$vehicleCount, paired_set.eleven$hum,method = "pearson")
+```
+
+#### Daily traffic flow
+
+The hourly plots clearly displays the rush hour - both in a dip in average speed and with more cars on the road - around 6-7 AM in the morning and 3-4 PM in the evening. It is interesting that the average speed is otherwise quite similar - even in the middle of the night where there is little traffic and you could expect that a bit more speeding was taking place.
+
+In the daily plots, Saturday and Sunday shows an increase in speeds, but compared with the vehicle count it could very well be due to less cars on the roads - it is almost only half the normal number.
+For the weekdays both average speed and vehicle count is very similar.
+
+#### Speed heatmap
+The last heatmap is for selected the morning hours in the week days. The plot gives a look at how the traffic in the early morning is located in the north - near the highway, and then through 7 and 8 o'clock grows in the business park also located north of the center. The center of the city is at no point getting near a maximum amount of traffic as I would have expected - but it is of course related to the fact that the roads are small in the city center.
+
+#### Weather effect on Traffic
+When we look further into the mixed data of weather of traffic at a specific timeslot, then the plot clearly shows that there is in fact no effect at all on traffic by either humidity, windspeed or temperature. The flatline shows that there is no change in no. of cars when the weather change in the two months measured.
+The previous seen small correllation is most likely due to the rhythm of the daily driving and not a direct correllation between humidity and vehicles on the road.
+
+## Reflection section
+
+The plotting of data from the chosen datasets on traffic and weather gave some insigths:
+
+Number of vehicles and the average speed correllated - this is no surprise, since with more cars on the road there will be more queues, traffic jams, or perhaps just longer waiting times at traffic lights. 
+
+I had expected a more clear relationship between weather conditions and traffic - but did not see any. This is most likely due to the short timeperiod of just two months, where temperature and wind did not have large enough deviatins to affect any visible change.
+Perhaps a follow-up study to see how weather affected the driving should bring in time periods with more diverse weather, or perhaps sample a full year.
+
+In regard to the data itself, then the amount of datapoints proved to overwhelm my cPU rather fast, and sample sets where used for all except the last touches. The increased precision with the large amount of data would perhaps be more useful for real-time calculations where a quick overview is easily achieved.
+
