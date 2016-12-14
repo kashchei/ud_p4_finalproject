@@ -18,7 +18,7 @@ I found the data interesting since it was local, extensive and free of use.
 
 The data was downloaded as a single CSV files for each position, and in a Python script (see "Final Exercise - 4- Handling data.ipynb") .all the files where converted from json and txt, and merged into large csv files.
 
-```{r libraries, echo=FALSE, warning=FALSE}
+```{r libraries, echo=FALSE, include=FALSE}
 #install.packages("forecast", repos=c("http://rstudio.org/_packages", "http://cran.rstudio.com"))
 library(ggplot2)
 library(gridExtra)
@@ -281,7 +281,7 @@ The weather plots for the whole peiod shows a temperature declining with time, w
 
 To see if there is any influence on the traffic speed or amount of vehicles on the road we merge the datasets and plot them together.
 
-```{r weather, echo=FALSE,warning=TRUE}
+```{r weather, echo=FALSE,warning=FALSE}
 
 # Aggregate data for both dataset to be averages per hour
 weather.hourly <- full_weather %>% group_by(day, hour) %>% summarize(hum = mean(as.numeric(as.character(hum))),tempm = mean(as.numeric(as.character(tempm))),wspdm = mean(as.numeric(as.character(wspdm))))
