@@ -18,7 +18,7 @@ I found the data interesting since it was local, extensive and free of use.
 
 The data was downloaded as a single CSV files for each position, and in a Python script (see "Final Exercise - 4- Handling data.ipynb") .all the files where converted from json and txt, and merged into large csv files.
 
-```{r libraries, echo=FALSE, warning=TRUE}
+```{r libraries, echo=FALSE, warning=FALSE}
 #install.packages("forecast", repos=c("http://rstudio.org/_packages", "http://cran.rstudio.com"))
 library(ggplot2)
 library(gridExtra)
@@ -34,7 +34,7 @@ library(scales)
 ```
 
 
-```{r gather_data, echo=FALSE,warning=TRUE}
+```{r gather_data, echo=FALSE,warning=FALSE}
 # Read in position file from csv
 positions <- read.csv("data_files/measuring_points.csv",sep=',')
 
@@ -51,7 +51,7 @@ full_dataset <- merge(x = traffic, y = positions, by = 'reportId', all = TRUE)
 
 Due to the size of the data, I picked a subset from 146 locations which gave me around 5.5 mio datapoints. And I removed test data and NA values. Due to long waiting times I also sampled the data down to half a million datapoints. 
 
-```{r clean full_dataset, echo = FALSE, warning=TRUE}
+```{r clean full_dataset, echo = FALSE, warning=FALSE}
 # Remove test value 1164
 full_dataset.clean <- subset(full_dataset, full_dataset$reportId != 1164)
 
@@ -102,7 +102,7 @@ The NDT_in_KMH is the non-damaging test speed - and not related to the legal spe
 
 I decided to look into the speeds and number of vehicles based on the hour of the day - and the day of the week.
 
-```{r speed, vehicles and time, echo = FALSE}
+```{r speed vehicles and time, echo = FALSE,warning=FALSE}
 # Calculate hourly averages in new dataframe - show curve over hourly averages
 
 # Selecting the hours from the timestamp
@@ -175,7 +175,7 @@ ggmap(map)+
 
 With the location data it is possible to produce a heat map - for this I selected the average speeds, and then split the data over hours of the day:
 
-```{r plot positions, echo=FALSE, warning=TRUE}
+```{r plot positions, echo=FALSE, warning=FALSE}
 
 # Use dplyr to create a summary with means for average speed per day
 speed.per.point <- full_dataset.clean.nna %>% group_by(lon1,lat1) %>% summarize(avgSpeed = mean(as.numeric(as.character(avgSpeed))))
@@ -196,7 +196,7 @@ ggmap(map,legend = "topleft", extent = "device")+
 
 The heatmap dispaly the average speed around the city. The hotspots are as expected in the locations with the main roads in the city. 
 
-```{r warning=TRUE, echo=FALSE}
+```{r warning=FALSE, echo=FALSE}
 ## Get average of avgSpeed for each position - group by position
 
 # Use dplyr to create a summary with means for average speed per day
@@ -318,7 +318,7 @@ In the weekly overview there seems to be a low correllation between humdity and 
 
 ## Final Plots
 
-```{r finalplots, echo=FALSE, warning=TRUE}
+```{r finalplots, echo=FALSE, warning=FALSE}
 
 ## HOURLY TRAFFIC FLOW
 
